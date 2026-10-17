@@ -1,0 +1,224 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned: the runner image and package versions are fixed so a run does
+      # not change when apt.llvm.org or ubuntu-latest move.
+      - name: Install LLVM 18 and libstdc++ 14
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 clang-18 llvm-18 clang-tidy-18
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+
+      - name: Build example
+        run: make all
+
+      - name: Check the compiled-in data is up to date
+        run: |
+          make embed PYTHON=python3
+          git diff --exit-code dasmig/phonegen_data.hpp
+
+      - name: Build and run tests
+        run: make test
+
+      - name: Build and run tests with compiled-in data
+        run: make test-embed
+
+      - name: Generate JUnit report
+        if: always()
+        run: ./build/test_runner --reporter junit --out build/test_report.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: build/test_report.xml
+
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Unit Tests
+          path: build/test_report.xml
+          reporter: java-junit
+
+      - name: Generate coverage report
+        run: make coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+
+      - name: Lint
+        run: make lint
+
+      - name: Build documentation
+        run: |
+          sudo apt-get install -y doxygen
+          make docs
+
+      - name: Upload documentation
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: doc/api/html
+
+  # Output must be identical everywhere (dasmig-core): the known-answer tests
+  # run on every compiler, standard library and CPU the libraries target.
+  compat:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gcc 14, libstdc++, x86-64 with FMA
+            os: ubuntu-24.04
+            install: sudo apt-get update && sudo apt-get install -y g++-14
+            cxx: g++-14
+            flags: -std=gnu++23 -O2 -march=haswell
+          - name: gcc 14, libstdc++, ARM64
+            os: ubuntu-24.04-arm
+            install: sudo apt-get update && sudo apt-get install -y g++-14
+            cxx: g++-14
+            flags: -std=gnu++23 -O2
+          - name: clang 18, libc++, x86-64
+            os: ubuntu-24.04
+            install: sudo apt-get update && sudo apt-get install -y clang-18 libc++-18-dev libc++abi-18-dev
+            cxx: clang++-18
+            flags: -std=c++23 -O2 -stdlib=libc++
+          - name: Apple clang, ARM64
+            os: macos-15
+            install: ''
+            cxx: clang++
+            flags: -std=c++23 -O2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install compiler
+        if: matrix.install != ''
+        run: ${{ matrix.install }}
+
+      - name: Build and run tests
+        run: |
+          mkdir -p build
+          ${{ matrix.cxx }} ${{ matrix.flags }} -Wall -Wextra -Wpedantic -I. \
+            -o build/test_runner tests/tests.cpp tests/catch_amalgamated.cpp
+          ./build/test_runner
+
+  msvc:
+    name: MSVC, x86-64
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build and run tests
+        shell: cmd
+        run: |
+          mkdir build
+          cl /nologo /std:c++latest /EHsc /O2 /W4 /permissive- /utf-8 /I. /Fobuild\ /Fe:build\test_runner.exe tests\tests.cpp tests\catch_amalgamated.cpp || exit /b 1
+          build\test_runner.exe
+
+  wasm:
+    name: Emscripten, WebAssembly (compiled-in data)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+
+      - name: Build and run tests
+        run: |
+          mkdir -p build
+          em++ -std=c++23 -O2 -fexceptions -sALLOW_MEMORY_GROWTH -sNODERAWFS -DDASMIG_PHONE_EMBED -I. \
+            -o build/test_runner.js tests/tests.cpp tests/catch_amalgamated.cpp
+          node build/test_runner.js
+
+  # Benchmarks: a report, not a gate yet (see bench/bench.hpp), uploaded as
+  # the bench-report artifact.
+  bench:
+    name: Benchmarks (report)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18 and libstdc++ 14
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 clang-18 valgrind
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+
+      - name: Run benchmarks
+        run: make bench
+
+      # Instructions executed by a fixed workload under cachegrind: stable from run to
+      # run, unlike wall time on a shared runner. A rise of more than 10% over
+      # bench/gate_baseline.txt fails (scripts/gate.py).
+      - name: Instruction-count gate
+        run: make bench-gate
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-report
+          path: build/bench.tsv
+
+  # The batch tests run worker threads; ThreadSanitizer reports any data race
+  # in the getters they call.
+  tsan:
+    name: ThreadSanitizer (batch tests)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18
+
+      - name: Build and run the batch tests
+        run: |
+          mkdir -p build
+          clang++-18 -std=c++23 -O1 -g -fsanitize=thread -Wall -Wextra -Wpedantic -I. \
+            -o build/test_tsan tests/tests.cpp tests/catch_amalgamated.cpp
+          ./build/test_tsan "[batch]"
+
+  deploy-docs:
+    needs: [build-and-test, compat, tsan, msvc, wasm]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,15 @@
+Third-party data in resources/. Each dataset, its columns and how it is built
+are described in doc/data.md.
+
+countries.tsv, ranges.tsv, formats.tsv
+  Derived from PhoneNumberMetadata.xml of Google's libphonenumber, release
+  v9.0.41 (https://github.com/google/libphonenumber). The repository is
+  licensed under the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0);
+  the metadata states no separate licence. The number patterns are expanded
+  into prefix ranges by scripts/prepare_phones.py; the original regular
+  expressions are not shipped. The population column is copied from
+  country-generator.
+
+reserved.tsv
+  Numbers set aside for fiction by the regulators: Bundesnetzagentur (DE),
+  Ofcom (GB), ACMA (AU) and NANPA (US, CA). Curated for this library.
