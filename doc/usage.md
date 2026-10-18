@@ -60,8 +60,8 @@ Each `load` replaces the data and every layer loaded before.
 auto p = gen.get_phone(dasmig::phone_request{});               // any country
 auto br = gen.get_phone({.country = "BR", .type = dasmig::phone_type::mobile});
 
-br.country;          // "BR"
-br.country_code;     // "55"
+br.country_code;     // "BR" (ISO 3166-1 alpha-2, as in the other generators)
+br.calling_code;     // "55"
 br.national_number;  // "11912345678"
 br.type;             // phone_type::mobile
 br.reserved;         // false (see the safe option)

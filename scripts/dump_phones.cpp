@@ -11,7 +11,7 @@ int main(int argc, char** argv)
     dasmig::phg gen;
     if (!gen.load(dasmig::dataset::lite)) return 1;
     gen.for_each_phone({}, {.count = count, .threads = 0}, seed, [](std::uint64_t, const dasmig::phone& p) {
-        std::cout << p.country << '\t' << (p.type == dasmig::phone_type::mobile ? "mobile" : "fixed") << '\t'
+        std::cout << p.country_code << '\t' << (p.type == dasmig::phone_type::mobile ? "mobile" : "fixed") << '\t'
                   << p.e164() << '\n';
     });
     return 0;

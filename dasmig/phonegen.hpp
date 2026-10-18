@@ -82,22 +82,22 @@ struct phone_request
 class phone
 {
   public:
-    std::string country;         ///< ISO 3166-1 alpha-2 of the region the number belongs to.
-    std::string country_code;    ///< Calling code without the plus sign ("55").
+    std::string country_code;    ///< ISO 3166-1 alpha-2 of the region the number belongs to.
+    std::string calling_code;    ///< Calling code without the plus sign ("55").
     std::string national_number; ///< The digits after the calling code, without a national prefix.
     phone_type type{phone_type::mobile}; ///< Mobile or fixed line.
     bool reserved{false};        ///< True when the number comes from a range set aside for fiction.
 
     /// @brief The number in E.164.
     /// @return For example `+5511987654321`.
-    [[nodiscard]] std::string e164() const { return "+" + country_code + national_number; }
+    [[nodiscard]] std::string e164() const { return "+" + calling_code + national_number; }
 
     /// @brief The number as written for international dialling.
     /// @return For example `+55 11 98765-4321`.
     [[nodiscard]] std::string international() const
     {
         if (_international == "-") return e164();
-        return "+" + country_code + " " + apply_(_international);
+        return "+" + calling_code + " " + apply_(_international);
     }
 
     /// @brief The number as written inside its country.
@@ -109,7 +109,7 @@ class phone
     /// @return For example `tel:+55-11-98765-4321`.
     [[nodiscard]] std::string rfc3966() const
     {
-        std::string out = "tel:+" + country_code;
+        std::string out = "tel:+" + calling_code;
         const std::string body = _international == "-" ? national_number : apply_(_international);
         bool gap = true; // a separator is pending
         for (const char c : body)
@@ -147,7 +147,7 @@ class phone
     void to_json(core::json_writer& w) const
     {
         w.begin_object()
-            .field("country", country)
+            .field("country_code", country_code)
             .field("type", type == phone_type::mobile ? "mobile" : "fixed")
             .field("e164", e164())
             .field("international", international())
@@ -160,7 +160,7 @@ class phone
 
     /// @brief This number as a JSON document.
     /// @return Compact JSON, for example
-    ///   `{"country":"BR","type":"mobile","e164":"+55...",...}`.
+    ///   `{"country_code":"BR","type":"mobile","e164":"+55...",...}`.
     [[nodiscard]] std::string to_json() const
     {
         core::json_writer w;
@@ -303,8 +303,8 @@ class phg
 
         phone v;
         v._signature = {.seed = call_seed, .data = data_hash()};
-        v.country = country.region;
-        v.country_code = country.code;
+        v.country_code = country.region;
+        v.calling_code = country.code;
         v.type = ti == 0 ? phone_type::mobile : phone_type::fixed;
         v.reserved = reserved;
         v.national_number = draw_number_(request.safe && !reserved, country, range, dr);

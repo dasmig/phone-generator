@@ -17,7 +17,7 @@ int main()
     for (int i = 0; i < 5; ++i)
     {
         const auto p = gen.get_phone(dasmig::phone_request{});
-        std::cout << "  " << p.country << "  " << p.international() << "  (" << p.national() << ")\n";
+        std::cout << "  " << p.country_code << "  " << p.international() << "  (" << p.national() << ")\n";
     }
 
     std::cout << "\nBrazilian mobiles:\n";

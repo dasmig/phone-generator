@@ -14,11 +14,11 @@
 // ---------------------------------------------------------------------------
 
 #define KAT_DATA_HASH 0x82d22110ee3bc395ULL
-#define KAT_JSON_1 R"({"country":"EG","type":"fixed","e164":"+20928653194","international":"+20 92 8653194","national":"092 8653194","reserved":false,"signature":{"seed":"0000000000000001","data":"82d22110ee3bc395"}})"
-#define KAT_JSON_2 R"({"country":"US","type":"fixed","e164":"+17759545740","international":"+1 775-954-5740","national":"(775) 954-5740","reserved":false,"signature":{"seed":"0000000000000002","data":"82d22110ee3bc395"}})"
-#define KAT_JSON_3 R"({"country":"GB","type":"mobile","e164":"+447700900222","international":"+44 7700 900222","national":"07700 900222","reserved":true,"signature":{"seed":"0000000000000003","data":"82d22110ee3bc395"}})"
-#define KAT_HASH 0xef431dc2119d0467ULL
-#define KAT_BATCH_HASH 0x94ccc3f1d456cef5ULL
+#define KAT_JSON_1 R"({"country_code":"EG","type":"fixed","e164":"+20928653194","international":"+20 92 8653194","national":"092 8653194","reserved":false,"signature":{"seed":"0000000000000001","data":"82d22110ee3bc395"}})"
+#define KAT_JSON_2 R"({"country_code":"US","type":"fixed","e164":"+17759545740","international":"+1 775-954-5740","national":"(775) 954-5740","reserved":false,"signature":{"seed":"0000000000000002","data":"82d22110ee3bc395"}})"
+#define KAT_JSON_3 R"({"country_code":"GB","type":"mobile","e164":"+447700900222","international":"+44 7700 900222","national":"07700 900222","reserved":true,"signature":{"seed":"0000000000000003","data":"82d22110ee3bc395"}})"
+#define KAT_HASH 0x46b24ac8eacaf16fULL
+#define KAT_BATCH_HASH 0x8aa51a38b7aa6e6bULL
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -201,8 +201,8 @@ TEST_CASE("the country and the type follow the request", "[generation]")
     for (std::uint64_t s = 0; s < 200; ++s)
     {
         const auto m = gen.get_phone({.country = "br", .type = dasmig::phone_type::mobile}, s);
-        REQUIRE(m.country == "BR");
-        REQUIRE(m.country_code == "55");
+        REQUIRE(m.country_code == "BR");
+        REQUIRE(m.calling_code == "55");
         REQUIRE(m.type == dasmig::phone_type::mobile);
         REQUIRE(gen.get_phone({.country = "BR", .type = dasmig::phone_type::fixed}, s).type ==
                 dasmig::phone_type::fixed);
@@ -257,10 +257,10 @@ TEST_CASE("the formats keep every digit in order", "[generation][format]")
     {
         const auto p = gen.get_phone({}, s);
         INFO(p.to_json());
-        REQUIRE(p.e164() == "+" + p.country_code + p.national_number);
-        REQUIRE(digits_of(p.international()) == p.country_code + p.national_number);
-        REQUIRE(p.rfc3966().starts_with("tel:+" + p.country_code));
-        REQUIRE(digits_of(p.rfc3966()) == p.country_code + p.national_number);
+        REQUIRE(p.e164() == "+" + p.calling_code + p.national_number);
+        REQUIRE(digits_of(p.international()) == p.calling_code + p.national_number);
+        REQUIRE(p.rfc3966().starts_with("tel:+" + p.calling_code));
+        REQUIRE(digits_of(p.rfc3966()) == p.calling_code + p.national_number);
         // The national format ends with the subscriber digits. It may drop or add leading ones, as
         // libphonenumber does for Argentinian mobiles (+54 9 11 5811-5808 is 11 15-5811-5808).
         REQUIRE(digits_of(p.national()).ends_with(p.national_number.substr(p.national_number.size() - 4)));
@@ -286,8 +286,8 @@ TEST_CASE("countries are drawn by population by default, uniformly on request", 
     std::map<std::string, int> uniform;
     for (std::uint64_t s = 0; s < draws; ++s)
     {
-        ++weighted[gen.get_phone({}, s).country];
-        ++uniform[gen.get_phone({.weighted = false}, s).country];
+        ++weighted[gen.get_phone({}, s).country_code];
+        ++uniform[gen.get_phone({.weighted = false}, s).country_code];
     }
     REQUIRE(weighted["IN"] > draws / 25);     // about 17% of the population of the 195
     REQUIRE(weighted["IS"] < draws / 200);    // about 0.005%
@@ -425,7 +425,7 @@ TEST_CASE("to_json and signature", "[json]")
     REQUIRE(v.seed() == 99);
     REQUIRE(v.signature().data == gen.data_hash());
     const auto json = v.to_json();
-    REQUIRE(json.starts_with(R"({"country":")"));
+    REQUIRE(json.starts_with(R"({"country_code":")"));
     REQUIRE(json.find(R"("e164":"+)") != std::string::npos);
     REQUIRE(json.find(R"("signature":{"seed":"0000000000000063")") != std::string::npos);
 
@@ -457,7 +457,7 @@ TEST_CASE("extend adds a country, replaces ranges and removes them", "[extend]")
     for (std::uint64_t s = 0; s < 100; ++s)
     {
         const auto p = gen.get_phone({.country = "XX"}, s);
-        REQUIRE(p.country_code == "999");
+        REQUIRE(p.calling_code == "999");
         REQUIRE(p.national_number.size() == 7);
         REQUIRE(p.national_number[0] == '7');
         REQUIRE(p.national_number[1] >= '1');
