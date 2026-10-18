@@ -6,8 +6,8 @@ The data in `resources/` and how phone-generator uses it (rule 6 of the dasmig s
 
 | Tier | Regions | Ranges | What it holds |
 | --- | --- | --- | --- |
-| `lite` | 195 | 11,791 | The sovereign states of `country-generator`'s `lite` tier that libphonenumber has a plan for (all 195) |
-| `full` | 243 | 12,890 | The 250 territories of its `full` tier; seven (AQ, BV, GS, HM, PN, TF, UM) have no libphonenumber plan |
+| `lite` | 195 | 11,637 | The sovereign states of `country-generator`'s `lite` tier that libphonenumber has a plan for (all 195) |
+| `full` | 243 | 12,736 | The 250 territories of its `full` tier; seven (AQ, BV, GS, HM, PN, TF, UM) have no libphonenumber plan |
 
 ## Files
 

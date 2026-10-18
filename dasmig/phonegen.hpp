@@ -288,92 +288,18 @@ class phg
     {
         require_data_();
         const core::rng call{call_seed};
-
-        // The country.
         const std::size_t want = request.type ? static_cast<std::size_t>(*request.type) : any_;
-        std::size_t ci = 0;
-        if (request.country)
-        {
-            const auto it = _model.by_region.find(upper_(*request.country));
-            if (it == _model.by_region.end())
-            {
-                throw std::invalid_argument("get_phone: unknown country '" + *request.country + "'");
-            }
-            ci = it->second;
-            if (want != any_ && _model.countries[ci].types.at(want).ranges.empty())
-            {
-                throw std::invalid_argument("get_phone: " + _model.countries[ci].region + " has no " +
-                                            (want == 0 ? "mobile" : "fixed-line") + " numbers");
-            }
-        }
-        else
-        {
-            auto cr = call.split("country");
-            const auto& table = request.weighted ? _model.by_population.at(want) : _model.by_uniform.at(want);
-            if (table.empty()) throw std::runtime_error("get_phone: no country has numbers of that type");
-            ci = table.pick(cr);
-        }
-        const auto& country = _model.countries[ci];
-
-        // The type.
-        std::size_t ti = want;
-        if (ti == any_)
-        {
-            bool has_mobile = !country.types[0].ranges.empty();
-            bool has_fixed = !country.types[1].ranges.empty();
-            if (request.safe && has_mobile && has_fixed)
-            {
-                // Prefer the type the regulator has a range for.
-                const bool rm = !country.types[0].reserved.empty();
-                const bool rf = !country.types[1].reserved.empty();
-                if (rm != rf)
-                {
-                    has_mobile = rm;
-                    has_fixed = rf;
-                }
-            }
-            auto tr = call.split("phone-type");
-            if (!has_mobile && !has_fixed)
-            {
-                throw std::invalid_argument("get_phone: " + country.region + " has no numbers");
-            }
-            const bool mobile = has_mobile && (!has_fixed || core::bernoulli(tr, mobile_share_));
-            ti = mobile ? 0 : 1;
-        }
+        const auto& country = _model.countries[pick_country_(request, want, call)];
+        const std::size_t ti = pick_type_(request, country, want, call);
         const auto& by_type = country.types.at(ti);
 
-        // The range.
         auto rr = call.split("phone-range");
         auto dr = call.split("phone-digits");
-        const range_data* range = nullptr;
-        bool reserved = false;
-        if (request.safe && !by_type.reserved.empty())
-        {
-            range = &by_type.reserved[request.weighted ? by_type.reserved_weights.pick(rr)
-                                                       : pick_uniform_(rr, by_type.reserved.size())];
-            reserved = true;
-        }
-        else
-        {
-            range = &by_type.ranges[request.weighted ? by_type.weights.pick(rr)
-                                                     : pick_uniform_(rr, by_type.ranges.size())];
-        }
-
-        // The digits.
-        std::string digits = draw_digits_(*range, dr);
-        if (request.safe && !reserved)
-        {
-            // No reserved range: look for a number no allocated range holds.
-            for (int attempt = 0; attempt < outside_attempts_; ++attempt)
-            {
-                std::string candidate = random_digits_(range->length, dr);
-                if (!country_holds_(country, candidate))
-                {
-                    digits = std::move(candidate);
-                    break;
-                }
-            }
-        }
+        const bool reserved = request.safe && !by_type.reserved.empty();
+        const range_data& range = reserved ? by_type.reserved[request.weighted ? by_type.reserved_weights.pick(rr)
+                                                                               : pick_uniform_(rr, by_type.reserved.size())]
+                                           : by_type.ranges[request.weighted ? by_type.weights.pick(rr)
+                                                                             : pick_uniform_(rr, by_type.ranges.size())];
 
         phone v;
         v._signature = {.seed = call_seed, .data = data_hash()};
@@ -381,41 +307,8 @@ class phg
         v.country_code = country.code;
         v.type = ti == 0 ? phone_type::mobile : phone_type::fixed;
         v.reserved = reserved;
-        v.national_number = std::move(digits);
-        // A reserved range has no format of its own (and need not be allocated):
-        // use the one of the allocated range that shares the longest prefix.
-        std::uint32_t format = range->format;
-        if (reserved)
-        {
-            std::size_t best = 0;
-            bool found = false;
-            for (const auto& r : by_type.ranges)
-            {
-                if (r.length != v.national_number.size()) continue;
-                std::size_t common = 0;
-                while (common < r.prefix.size() && r.prefix[common] == v.national_number[common]) ++common;
-                if (!found || common > best)
-                {
-                    best = common;
-                    format = r.format;
-                    found = true;
-                }
-            }
-        }
-        const auto fit = _model.formats.find(format);
-        const format_data* fmt = fit == _model.formats.end() ? nullptr : &fit->second;
-        if (fmt != nullptr && fmt->total == v.national_number.size())
-        {
-            v._groups = fmt->groups;
-            v._national = fmt->national;
-            v._international = fmt->international;
-        }
-        else
-        {
-            v._groups = {static_cast<std::uint8_t>(v.national_number.size())};
-            v._national = "$1";
-            v._international = "$1";
-        }
+        v.national_number = draw_number_(request.safe && !reserved, country, range, dr);
+        apply_format_(v, reserved ? nearest_format_(by_type, v.national_number) : range.format);
         return v;
     }
 
@@ -775,6 +668,112 @@ class phg
         if (!load(dataset::lite)) (void)load(dataset::full);
     }
 
+    // -- Steps of get_phone -------------------------------------------------
+
+    // The country: the requested one, or a draw among those with numbers of the type.
+    [[nodiscard]] std::size_t pick_country_(const phone_request& request, std::size_t want, const core::rng& call) const
+    {
+        if (!request.country)
+        {
+            auto cr = call.split("country");
+            const auto& table = request.weighted ? _model.by_population.at(want) : _model.by_uniform.at(want);
+            if (table.empty()) throw std::runtime_error("get_phone: no country has numbers of that type");
+            return table.pick(cr);
+        }
+        const auto it = _model.by_region.find(upper_(*request.country));
+        if (it == _model.by_region.end())
+        {
+            throw std::invalid_argument("get_phone: unknown country '" + *request.country + "'");
+        }
+        if (want != any_ && _model.countries[it->second].types.at(want).ranges.empty())
+        {
+            throw std::invalid_argument("get_phone: " + _model.countries[it->second].region + " has no " +
+                                        (want == 0 ? "mobile" : "fixed-line") + " numbers");
+        }
+        return it->second;
+    }
+
+    // The type: the requested one, or mobile seven times in ten when the country has both.
+    [[nodiscard]] static std::size_t pick_type_(const phone_request& request, const country_data& country,
+                                                std::size_t want, const core::rng& call)
+    {
+        if (want != any_) return want;
+        bool has_mobile = !country.types[0].ranges.empty();
+        bool has_fixed = !country.types[1].ranges.empty();
+        if (request.safe && has_mobile && has_fixed)
+        {
+            // Prefer the type the regulator has a range for.
+            const bool reserved_mobile = !country.types[0].reserved.empty();
+            const bool reserved_fixed = !country.types[1].reserved.empty();
+            if (reserved_mobile != reserved_fixed)
+            {
+                has_mobile = reserved_mobile;
+                has_fixed = reserved_fixed;
+            }
+        }
+        if (!has_mobile && !has_fixed)
+        {
+            throw std::invalid_argument("get_phone: " + country.region + " has no numbers");
+        }
+        auto tr = call.split("phone-type");
+        return has_mobile && (!has_fixed || core::bernoulli(tr, mobile_share_)) ? 0 : 1;
+    }
+
+    // The digits of a range; with @p outside (safe, no reserved range) a number no allocated
+    // range of the country holds, when one turns up in a few tries.
+    [[nodiscard]] static std::string draw_number_(bool outside, const country_data& country, const range_data& range,
+                                                  core::rng& dr)
+    {
+        std::string digits = draw_digits_(range, dr);
+        for (int attempt = 0; outside && attempt < outside_attempts_; ++attempt)
+        {
+            std::string candidate = random_digits_(range.length, dr);
+            if (!country_holds_(country, candidate))
+            {
+                return candidate;
+            }
+        }
+        return digits;
+    }
+
+    // A reserved range has no format of its own and need not be allocated: the format of the
+    // allocated range of the same length that shares the longest prefix with the number.
+    static std::uint32_t nearest_format_(const type_data& by_type, const std::string& digits)
+    {
+        std::uint32_t format = 0;
+        std::size_t best = 0;
+        bool found = false;
+        for (const auto& r : by_type.ranges)
+        {
+            if (r.length != digits.size()) continue;
+            std::size_t common = 0;
+            while (common < r.prefix.size() && r.prefix[common] == digits[common]) ++common;
+            if (!found || common > best)
+            {
+                best = common;
+                format = r.format;
+                found = true;
+            }
+        }
+        return format;
+    }
+
+    // Writes the format's groups and templates into the number, or one group of every digit.
+    void apply_format_(phone& v, std::uint32_t format) const
+    {
+        const auto it = _model.formats.find(format);
+        if (it != _model.formats.end() && it->second.total == v.national_number.size())
+        {
+            v._groups = it->second.groups;
+            v._national = it->second.national;
+            v._international = it->second.international;
+            return;
+        }
+        v._groups = {static_cast<std::uint8_t>(v.national_number.size())};
+        v._national = "$1";
+        v._international = "$1";
+    }
+
     // -- Helpers ----------------------------------------------------------
 
     static std::span<const core::embedded_file> embedded_files_()
@@ -803,13 +802,17 @@ class phg
         return core::uniform_int<std::size_t>(r, 0, n - 1);
     }
 
+    static constexpr std::uint16_t digit_bit_(int d) { return static_cast<std::uint16_t>(1U << static_cast<unsigned>(d)); }
+
+    static constexpr bool has_digit_(std::uint16_t set, int d) { return (set & digit_bit_(d)) != 0U; }
+
     static char draw_digit_(const mask_token& t, core::rng& r)
     {
         const int n = std::popcount(static_cast<unsigned>(t.digits));
         int k = core::uniform_int(r, 0, n - 1);
         for (int d = 0; d < 10; ++d)
         {
-            if (((t.digits >> d) & 1U) != 0U && k-- == 0) return static_cast<char>('0' + d);
+            if (has_digit_(t.digits, d) && k-- == 0) return static_cast<char>('0' + d);
         }
         return '0';
     }
@@ -840,7 +843,7 @@ class phg
         {
             for (std::uint16_t i = 0; i < t.count; ++i, ++pos)
             {
-                if (((t.digits >> (digits[pos] - '0')) & 1U) == 0U) return false;
+                if (!has_digit_(t.digits, digits[pos] - '0')) return false;
             }
         }
         return true;
@@ -891,6 +894,37 @@ class phg
 
     // -- Row checks and the model -------------------------------------------
 
+    // The digits of a `[...]` class (its @p body, between the brackets), as a set.
+    static std::uint16_t parse_class_(const core::tsv_row& row, std::string_view body)
+    {
+        std::uint16_t bits = 0;
+        for (std::size_t k = 0; k < body.size(); ++k)
+        {
+            if (body[k] < '0' || body[k] > '9') throw row.error("mask", "bad class '[" + std::string{body} + "]'");
+            const bool span = k + 2 < body.size() && body[k + 1] == '-';
+            const char last = span ? body[k + 2] : body[k];
+            if (last < body[k]) throw row.error("mask", "bad range in '[" + std::string{body} + "]'");
+            for (char d = body[k]; d <= last; ++d) bits |= digit_bit_(d - '0');
+            if (span) k += 2;
+        }
+        if (bits == 0) throw row.error("mask", "empty class");
+        return bits;
+    }
+
+    // The count of a `{n}` repeat (its @p body, between the braces).
+    static std::uint16_t parse_repeat_(const core::tsv_row& row, std::string_view body)
+    {
+        unsigned n = 0;
+        for (const char c : body)
+        {
+            if (c < '0' || c > '9') throw row.error("mask", "bad repeat '{" + std::string{body} + "}'");
+            n = n * 10 + static_cast<unsigned>(c - '0');
+            if (n > 40) throw row.error("mask", "repeat too large");
+        }
+        if (n == 0) throw row.error("mask", "repeat must be positive");
+        return static_cast<std::uint16_t>(n);
+    }
+
     static std::vector<mask_token> parse_mask_(const core::tsv_row& row, std::string_view text)
     {
         std::vector<mask_token> out;
@@ -898,55 +932,28 @@ class phg
         while (i < text.size())
         {
             mask_token t;
-            if (text[i] == '#')
-            {
-                t.digits = 0x3ff;
-                ++i;
-            }
-            else if (text[i] == '[')
+            const char c = text[i];
+            if (c == '[')
             {
                 const auto close = text.find(']', i);
                 if (close == std::string_view::npos) throw row.error("mask", "unclosed '['");
-                t.digits = 0;
-                for (std::size_t k = i + 1; k < close; ++k)
-                {
-                    if (text[k] < '0' || text[k] > '9') throw row.error("mask", "bad class in '" + std::string{text} + "'");
-                    if (k + 2 < close && text[k + 1] == '-')
-                    {
-                        if (text[k + 2] < text[k]) throw row.error("mask", "bad range in '" + std::string{text} + "'");
-                        for (char d = text[k]; d <= text[k + 2]; ++d) t.digits |= static_cast<std::uint16_t>(1U << (d - '0'));
-                        k += 2;
-                    }
-                    else
-                    {
-                        t.digits |= static_cast<std::uint16_t>(1U << (text[k] - '0'));
-                    }
-                }
-                if (t.digits == 0) throw row.error("mask", "empty class");
+                t.digits = parse_class_(row, text.substr(i + 1, close - i - 1));
                 i = close + 1;
             }
-            else if (text[i] >= '0' && text[i] <= '9')
+            else if (c == '#' || (c >= '0' && c <= '9'))
             {
-                t.digits = static_cast<std::uint16_t>(1U << (text[i] - '0'));
+                t.digits = c == '#' ? std::uint16_t{0x3ff} : digit_bit_(c - '0');
                 ++i;
             }
             else
             {
-                throw row.error("mask", std::string{"unexpected '"} + text[i] + "' in '" + std::string{text} + "'");
+                throw row.error("mask", std::string{"unexpected '"} + c + "' in '" + std::string{text} + "'");
             }
             if (i < text.size() && text[i] == '{')
             {
                 const auto close = text.find('}', i);
                 if (close == std::string_view::npos) throw row.error("mask", "unclosed '{'");
-                unsigned n = 0;
-                for (std::size_t k = i + 1; k < close; ++k)
-                {
-                    if (text[k] < '0' || text[k] > '9') throw row.error("mask", "bad repeat in '" + std::string{text} + "'");
-                    n = n * 10 + static_cast<unsigned>(text[k] - '0');
-                    if (n > 40) throw row.error("mask", "repeat too large");
-                }
-                if (n == 0) throw row.error("mask", "repeat must be positive");
-                t.count = static_cast<std::uint16_t>(n);
+                t.count = parse_repeat_(row, text.substr(i + 1, close - i - 1));
                 i = close + 1;
             }
             out.push_back(t);
@@ -1050,9 +1057,8 @@ class phg
         return out;
     }
 
-    static model build_model_(const tables& tbls)
+    static void read_formats_(model& m, const tables& tbls)
     {
-        model m;
         for (const auto& row : tbls.at(index_(table::formats)).rows())
         {
             format_data f;
@@ -1064,7 +1070,10 @@ class phg
                                   : f.national;
             m.formats[static_cast<std::uint32_t>(row.get<std::int64_t>("id"))] = std::move(f);
         }
+    }
 
+    static void read_countries_(model& m, const tables& tbls)
+    {
         for (const auto& row : tbls.at(index_(table::countries)).rows())
         {
             country_data c;
@@ -1074,51 +1083,74 @@ class phg
             m.by_region.emplace(c.region, m.countries.size());
             m.countries.push_back(std::move(c));
         }
+    }
 
-        const auto locate = [&](const core::tsv_row& row) -> country_data& {
-            const auto it = m.by_region.find(upper_(row["region"]));
-            if (it == m.by_region.end()) throw row.error("region", "no country '" + std::string{row["region"]} + "' in countries.tsv");
-            return m.countries[it->second];
-        };
+    static country_data& locate_(model& m, const core::tsv_row& row)
+    {
+        const auto it = m.by_region.find(upper_(row["region"]));
+        if (it == m.by_region.end())
+        {
+            throw row.error("region", "no country '" + std::string{row["region"]} + "' in countries.tsv");
+        }
+        return m.countries[it->second];
+    }
+
+    static void read_ranges_(model& m, const tables& tbls)
+    {
         for (const auto& row : tbls.at(index_(table::ranges)).rows())
         {
-            auto& c = locate(row);
+            auto& c = locate_(m, row);
             auto r = parse_range_(row, true);
             const auto f = m.formats.find(r.format);
             if (f == m.formats.end()) throw row.error("format", "no format " + std::to_string(r.format) + " in formats.tsv");
-            if (f->second.total != r.length) throw row.error("format", "format " + std::to_string(r.format) + " groups " + std::to_string(f->second.total) + " digits, the range has " + std::to_string(r.length));
+            if (f->second.total != r.length)
+            {
+                throw row.error("format", "format " + std::to_string(r.format) + " groups " + std::to_string(f->second.total) +
+                                              " digits, the range has " + std::to_string(r.length));
+            }
             c.types.at(type_index_(row)).ranges.push_back(std::move(r));
         }
         for (const auto& row : tbls.at(index_(table::reserved)).rows())
         {
-            locate(row).types.at(type_index_(row)).reserved.push_back(parse_range_(row, false));
+            locate_(m, row).types.at(type_index_(row)).reserved.push_back(parse_range_(row, false));
         }
+    }
 
-        // Only countries with numbers of the type enter the draw.
+    // The weighted tables of the draws; only countries with numbers of the type enter them.
+    static void build_draw_tables_(model& m)
+    {
         for (std::size_t i = 0; i < m.countries.size(); ++i)
         {
             auto& c = m.countries[i];
-            bool has[2]{};
+            std::array<bool, 2> has{};
             for (std::size_t t = 0; t < 2; ++t)
             {
-                auto& td = c.types[t];
-                has[t] = !td.ranges.empty();
+                auto& td = c.types.at(t);
+                has.at(t) = !td.ranges.empty();
                 for (std::size_t k = 0; k < td.ranges.size(); ++k) td.weights.add(k, td.ranges[k].weight);
                 for (std::size_t k = 0; k < td.reserved.size(); ++k) td.reserved_weights.add(k, td.reserved[k].weight);
-                if (has[t] && !(td.weights.total_weight() > 0.0))
+                if (has.at(t) && !(td.weights.total_weight() > 0.0))
                 {
                     throw std::invalid_argument("country " + c.region + ": every range has weight 0");
                 }
             }
+            const std::array<bool, 3> offered{has.at(0), has.at(1), has.at(0) || has.at(1)};
             for (std::size_t t = 0; t < 3; ++t)
             {
-                if (t == any_ ? (has[0] || has[1]) : has[t])
-                {
-                    m.by_population[t].add(i, c.population);
-                    m.by_uniform[t].add(i, 1.0);
-                }
+                if (!offered.at(t)) continue;
+                m.by_population.at(t).add(i, c.population);
+                m.by_uniform.at(t).add(i, 1.0);
             }
         }
+    }
+
+    static model build_model_(const tables& tbls)
+    {
+        model m;
+        read_formats_(m, tbls);
+        read_countries_(m, tbls);
+        read_ranges_(m, tbls);
+        build_draw_tables_(m);
         return m;
     }
 

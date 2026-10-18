@@ -99,6 +99,33 @@ TEST_CASE("load(dataset::lite) loads the sovereign states", "[loading]")
     REQUIRE(gen.layers(dasmig::phone_table::ranges).size() == 1);
 }
 
+TEST_CASE("the full tier loads the territories too and every country draws both types", "[loading][full]")
+{
+    dasmig::phg gen;
+    for (const auto* candidate : {"resources/full", "../resources/full"})
+    {
+        if (std::filesystem::is_directory(candidate))
+        {
+            gen.load(std::filesystem::path{candidate});
+            break;
+        }
+    }
+    REQUIRE(gen.has_data());
+    REQUIRE(gen.country_count() == 243);
+    REQUIRE(gen.has_country("AX"));
+    REQUIRE_FALSE(gen.has_country("AQ")); // no libphonenumber plan
+    for (const auto& type : {dasmig::phone_type::mobile, dasmig::phone_type::fixed})
+    {
+        for (std::uint64_t s = 0; s < 3; ++s)
+        {
+            for (const auto* c : {"AX", "GI", "PR", "GU", "VA", "BR", "US"})
+            {
+                REQUIRE(gen.get_phone({.country = c, .type = type}, s).national_number.size() >= 4);
+            }
+        }
+    }
+}
+
 TEST_CASE("load - non-existent path is a no-op", "[loading]")
 {
     dasmig::phg gen;
