@@ -21,10 +21,15 @@ A range is a digit prefix plus a mask for the digits after it: '#' a digit,
 '[2-9]' a class, '#{6}' six of the last. The regular expression of each type
 is compiled to an automaton and walked digit by digit until the rest of the
 number is a plain product of per-position digit sets, so the runtime needs no
-regular expressions and every number it draws is valid. 'weight' is the number
-of valid numbers the range holds (draws are uniform over valid numbers);
+regular expressions and every number it draws is valid. 'weight' is the range's
+share of the draws (its numbers over its length's, scaled);
 'length' is the national number length. Toll-free, premium and the other
-types are left out.
+types are left out; so are lengths that would pass 15 digits with the calling
+code (E.164). Within a length every valid number is equally likely; where a
+plan has several lengths, the length of libphonenumber's example number gets
+the draws of one, and every digit away from it a quarter of the length before
+(LENGTH_DECAY), because the plans list every length that is allowed, not how
+common it is.
 
 Formats come from the territory's numberFormat list: the first entry whose
 leading-digits pattern and pattern fit a sample number of the range. Templates
@@ -49,6 +54,11 @@ VERSION = "v9.0.41"
 URL = f"https://raw.githubusercontent.com/google/libphonenumber/{VERSION}/resources/PhoneNumberMetadata.xml"
 TYPES = (("mobile", "mobile"), ("fixedLine", "fixed"))
 DIGITS = "0123456789"
+E164_DIGITS = 15
+# Curated: a number plan with several lengths is drawn mostly at the length of its example number
+# (libphonenumber gives no frequencies): each digit away from it, a length gets this factor of the draws.
+LENGTH_DECAY = 0.25
+WEIGHT_SCALE = 1e9
 
 
 # Curated (rule 6): reserved ranges confirmed on the regulators' pages, in
@@ -449,17 +459,34 @@ def main():
             if not lengths:
                 continue
             auto = compile_regex(pat.text)
+            # E.164 allows 15 digits in all, calling code included.
+            lengths = {n for n in lengths if len(code) + n <= E164_DIGITS}
+            example = e.find("exampleNumber")
+            typical = len(strip(example.text)) if example is not None and example.text else None
+            buckets = {}
             for length in sorted(lengths):
                 rows = []
                 walk(auto, length, args.max_depth, rows, stats)
-                for prefix, mask, n in merge(rows, length):
+                total = sum(n for _, _, n in rows)
+                if total:
+                    buckets[length] = (merge(rows, length), total)
+            if not buckets:
+                continue
+            if typical not in buckets:
+                # no usable example: the length with the most numbers up to the example-less norm
+                typical = max(buckets, key=lambda n: buckets[n][1])
+            for length, (merged, total) in buckets.items():
+                # A length's draws: 1 at the example's length, LENGTH_DECAY for each digit away from it,
+                # spread evenly over the length's numbers.
+                share = LENGTH_DECAY ** abs(length - typical) * WEIGHT_SCALE / total
+                for prefix, mask, n in merged:
                     sample = prefix + re.sub(r"\[(\d)[^\]]*\]|#", lambda m: m.group(1) or "0", re.sub(
                         r"(\[[^\]]+\]|#|\d)\{(\d+)\}", lambda m: m.group(1) * int(m.group(2)), mask))
                     sample = sample[:length].ljust(length, "0")
                     groups, national, intl = pick_format(terr, np_, sample)
                     key = ("-".join(map(str, groups)), national, intl)
                     fid = formats.setdefault(key, len(formats) + 1)
-                    ranges.append([rid, kind, prefix, mask, str(length), str(n), str(fid)])
+                    ranges.append([rid, kind, prefix, mask, str(length), f"{n * share:.10g}", str(fid)])
 
     reserved = reserved_rows({(r[0], r[1]): r[2] for r in regex_rows})
     cg = Path(args.countries)

@@ -68,9 +68,10 @@ struct phone_request
     bool safe{false};
 
     /// @brief Weighted selection (default): countries by population and
-    ///        ranges by the number of valid numbers they hold, so every valid
-    ///        number is equally likely within a country. False selects
-    ///        countries and ranges uniformly.
+    ///        ranges by their weight: within a length every valid number is
+    ///        equally likely, and a plan with several lengths is drawn mostly
+    ///        at the length of its example number. False selects countries
+    ///        and ranges uniformly.
     bool weighted{true};
 };
 
@@ -225,7 +226,7 @@ enum class phone_table : std::uint8_t
 /// @brief Phone Generator: phone numbers valid in each country's numbering plan.
 ///
 /// A call draws a country (by population), a type, a range of that country
-/// (by the number of valid numbers it holds) and the remaining digits, each
+/// (by weight: even over the numbers of a length) and the remaining digits, each
 /// from a stream split from the call seed (`"country"`, `"phone-type"`,
 /// `"phone-range"`, `"phone-digits"`). Output is identical on every compiler
 /// and platform (dasmig-core).
@@ -741,7 +742,7 @@ class phg
     struct type_data
     {
         std::vector<range_data> ranges;
-        core::weighted_table<std::size_t> weights; // range index, by valid numbers
+        core::weighted_table<std::size_t> weights; // range index, by weight
         std::vector<range_data> reserved;
         core::weighted_table<std::size_t> reserved_weights;
     };

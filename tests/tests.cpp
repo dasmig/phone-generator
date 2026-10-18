@@ -13,12 +13,12 @@
 // Recorded answers (see "Known answers" below); re-record them with the data.
 // ---------------------------------------------------------------------------
 
-#define KAT_DATA_HASH 0xf1652a53ff681b99ULL
-#define KAT_JSON_1 R"({"country":"EG","type":"fixed","e164":"+20928653194","international":"+20 92 8653194","national":"092 8653194","reserved":false,"signature":{"seed":"0000000000000001","data":"f1652a53ff681b99"}})"
-#define KAT_JSON_2 R"({"country":"US","type":"fixed","e164":"+17759545740","international":"+1 775-954-5740","national":"(775) 954-5740","reserved":false,"signature":{"seed":"0000000000000002","data":"f1652a53ff681b99"}})"
-#define KAT_JSON_3 R"({"country":"GB","type":"mobile","e164":"+447700900222","international":"+44 7700 900222","national":"07700 900222","reserved":true,"signature":{"seed":"0000000000000003","data":"f1652a53ff681b99"}})"
-#define KAT_HASH 0x143141b9b0bfcb40ULL
-#define KAT_BATCH_HASH 0xca02a46febb0b2bfULL
+#define KAT_DATA_HASH 0x82d22110ee3bc395ULL
+#define KAT_JSON_1 R"({"country":"EG","type":"fixed","e164":"+20928653194","international":"+20 92 8653194","national":"092 8653194","reserved":false,"signature":{"seed":"0000000000000001","data":"82d22110ee3bc395"}})"
+#define KAT_JSON_2 R"({"country":"US","type":"fixed","e164":"+17759545740","international":"+1 775-954-5740","national":"(775) 954-5740","reserved":false,"signature":{"seed":"0000000000000002","data":"82d22110ee3bc395"}})"
+#define KAT_JSON_3 R"({"country":"GB","type":"mobile","e164":"+447700900222","international":"+44 7700 900222","national":"07700 900222","reserved":true,"signature":{"seed":"0000000000000003","data":"82d22110ee3bc395"}})"
+#define KAT_HASH 0xef431dc2119d0467ULL
+#define KAT_BATCH_HASH 0x94ccc3f1d456cef5ULL
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -200,6 +200,27 @@ TEST_CASE("every country and type validates against the libphonenumber pattern",
         }
     }
     REQUIRE(checked > 50000);
+}
+
+TEST_CASE("no number is longer than E.164 allows, and plans are drawn near their usual length", "[generation][length]")
+{
+    const auto gen = make_loaded_generator();
+    for (std::uint64_t s = 0; s < 20000; ++s)
+    {
+        const auto p = gen.get_phone({}, s);
+        INFO(p.to_json());
+        REQUIRE(p.e164().size() <= 16); // '+' and at most 15 digits
+        REQUIRE(p.national_number.size() >= 4);
+    }
+    // Germany lists lengths from 5 to 13 digits: most fixed-line numbers have 8 or 9 (the example's length is 8).
+    int near = 0;
+    constexpr int draws = 3000;
+    for (std::uint64_t s = 0; s < draws; ++s)
+    {
+        const auto n = gen.get_phone({.country = "DE", .type = dasmig::phone_type::fixed}, s).national_number.size();
+        near += (n >= 7 && n <= 9) ? 1 : 0;
+    }
+    REQUIRE(near > draws * 0.85);
 }
 
 TEST_CASE("the formats keep every digit in order", "[generation][format]")

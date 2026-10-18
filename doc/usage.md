@@ -71,7 +71,7 @@ br.national();       // "(11) 91234-5678"
 br.rfc3966();        // "tel:+55-11-91234-5678"
 ```
 
-- **Valid numbers.** Each country's mobile and fixed-line plan is stored as prefix ranges built from libphonenumber. A number is a prefix plus digits drawn from the range's masks, so it passes a validator. The draw is uniform over the valid numbers of the country, so a prefix with more numbers is more likely.
+- **Valid numbers.** Each country's mobile and fixed-line plan is stored as prefix ranges built from libphonenumber. A number is a prefix plus digits drawn from the range's masks, so it passes a validator. Within one length of a country's plan every valid number is equally likely, so a prefix with more numbers is more likely. Where a plan allows several lengths, the length of libphonenumber's example number is drawn most often and each digit away a quarter as often, and no number is longer than E.164's 15 digits with its calling code.
 - **Country.** Absent, it is drawn by population among the countries that have numbers of the type. `weighted = false` draws countries and ranges uniformly.
 - **Type.** Absent, mobile is drawn seven times in ten, or the only type the country has. An explicit type the country lacks throws `std::invalid_argument`.
 - **Formats** are libphonenumber's. They can differ from the digits: an Argentinian mobile is `+54 9 11 5811-5808` internationally and `11 15-5811-5808` nationally.
