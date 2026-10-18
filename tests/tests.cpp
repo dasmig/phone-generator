@@ -126,6 +126,23 @@ TEST_CASE("the full tier loads the territories too and every country draws both 
     }
 }
 
+TEST_CASE("countries() lists the countries a number can be generated for", "[loading]")
+{
+    const auto gen = make_loaded_generator();
+    const auto& codes = gen.countries();
+    REQUIRE(codes.size() == gen.country_count());
+    REQUIRE(codes.size() == 195);
+    REQUIRE(std::ranges::find(codes, "BR") != codes.end());
+    REQUIRE(std::ranges::find(codes, "br") == codes.end()); // upper case
+    for (const auto& code : codes)
+    {
+        REQUIRE(gen.has_country(code));
+        REQUIRE_NOTHROW(gen.get_phone({.country = code}, std::uint64_t{1}));
+    }
+    dasmig::phg empty;
+    REQUIRE(empty.countries().empty());
+}
+
 TEST_CASE("load - non-existent path is a no-op", "[loading]")
 {
     dasmig::phg gen;

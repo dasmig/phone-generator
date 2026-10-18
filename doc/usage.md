@@ -48,6 +48,7 @@ bool ok = gen.load(dasmig::dataset::lite);  // false when the tier is not found
 gen.load(std::filesystem::path{"path/to/resources/lite"}); // a directory
 gen.has_data();
 gen.country_count();
+gen.countries();             // ["AD", "AE", ...]: the countries a number can be generated for
 gen.has_country("br");
 gen.has_reserved("US", dasmig::phone_type::fixed);
 ```

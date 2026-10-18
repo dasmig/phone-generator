@@ -392,16 +392,24 @@ class phg
     /// @return True when at least one country is loaded.
     [[nodiscard]] bool has_data() const { return !_model.countries.empty(); }
 
-    /// @brief Return the number of countries loaded.
-    /// @return The count.
-    [[nodiscard]] std::size_t country_count() const { return _model.countries.size(); }
+    /// @brief Return the number of countries that have numbers.
+    /// @return The count; it is `countries().size()`.
+    [[nodiscard]] std::size_t country_count() const { return _model.codes.size(); }
 
-    /// @brief Whether a country is loaded.
+    /// @brief The countries a number can be generated for.
+    /// @return Their ISO-3166 two-letter codes (upper case), in the order of countries.tsv; the
+    ///         list a request's `country` is chosen from.
+    [[nodiscard]] const std::vector<std::string>& countries() const { return _model.codes; }
+
+    /// @brief Whether numbers can be generated for a country.
     /// @param country ISO-3166 two-letter code (any case).
-    /// @return True when countries.tsv has the country.
+    /// @return True when the country is in countries() (it is loaded and has at least one range).
     [[nodiscard]] bool has_country(std::string_view country) const
     {
-        return _model.by_region.contains(upper_(country));
+        const auto it = _model.by_region.find(upper_(country));
+        return it != _model.by_region.end() && std::ranges::any_of(_model.countries[it->second].types, [](const type_data& t) {
+                   return !t.ranges.empty();
+               });
     }
 
     /// @brief Whether a country has a range set aside for fiction.
@@ -651,6 +659,7 @@ class phg
     struct model
     {
         std::vector<country_data> countries;
+        std::vector<std::string> codes; // the countries with numbers, in table order
         std::unordered_map<std::string, std::size_t> by_region;
         std::unordered_map<std::uint32_t, format_data> formats;
         std::array<core::weighted_table<std::size_t>, 3> by_population; // mobile, fixed, either
@@ -1135,6 +1144,7 @@ class phg
                 }
             }
             const std::array<bool, 3> offered{has.at(0), has.at(1), has.at(0) || has.at(1)};
+            if (offered.at(any_)) m.codes.push_back(c.region);
             for (std::size_t t = 0; t < 3; ++t)
             {
                 if (!offered.at(t)) continue;
